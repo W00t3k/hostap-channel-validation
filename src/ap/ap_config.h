@@ -326,6 +326,8 @@ struct hostapd_bss_config {
 	unsigned int assoc_sa_query_max_timeout;
 	/* dot11AssociationSAQueryRetryTimeout (in TUs) */
 	int assoc_sa_query_retry_timeout;
+	// XXXX: inside or outside 11w
+	int ocv; /* Operating Channel Validation */
 #endif /* CONFIG_IEEE80211W */
 	enum {
 		PSK_RADIUS_IGNORED = 0,

@@ -190,6 +190,8 @@ struct wpa_auth_config {
 	enum mfp_options ieee80211w;
 	int group_mgmt_cipher;
 	int sae_require_mfp;
+	// XXX: Outside of 11w ifdef?
+	int ocv; /* Operating Channel Validation */
 #endif /* CONFIG_IEEE80211W */
 #ifdef CONFIG_IEEE80211R_AP
 	u8 ssid[SSID_MAX_LEN];

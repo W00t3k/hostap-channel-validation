@@ -452,6 +452,9 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 		bss->ieee80211w = ssid->ieee80211w;
 #endif /* CONFIG_IEEE80211W */
 
+	// XXX: Are we doing this at the right spot?
+	bss->ocv = ssid->ocv;
+
 #ifdef CONFIG_WPS
 	/*
 	 * Enable WPS by default for open and WPA/WPA2-Personal network, but

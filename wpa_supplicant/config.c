@@ -2019,6 +2019,42 @@ static char * wpa_config_write_mka_ckn(const struct parse_data *data,
 #endif /* CONFIG_MACSEC */
 
 
+#ifdef CONFIG_IEEE80211W
+
+static int wpa_config_parse_ocv(const struct parse_data *data,
+				    struct wpa_ssid *ssid, int line,
+				    const char *value)
+{
+	char *end;
+
+	ssid->ocv = strtol(value, &end, 0);
+	if (*end || ssid->ocv < 0 || ssid->ocv > 1) {
+		wpa_printf(MSG_ERROR, "Line %d: Invalid ocv value '%s'.",
+			   line, value);
+		return -1;
+	}
+	if (ssid->ocv && !ssid->ieee80211w)
+		ssid->ieee80211w = 1;
+	return 0;
+}
+
+
+#ifndef NO_CONFIG_WRITE
+static char * wpa_config_write_ocv(const struct parse_data *data,
+				       struct wpa_ssid *ssid)
+{
+	char *value = os_malloc(20);
+	if (value == NULL)
+		return NULL;
+	os_snprintf(value, 20, "%d", ssid->ocv);
+	value[20 - 1] = '\0';
+	return value;
+}
+#endif /* NO_CONFIG_WRITE */
+
+#endif /* CONFIG_IEEE80211W */
+
+
 static int wpa_config_parse_peerkey(const struct parse_data *data,
 				    struct wpa_ssid *ssid, int line,
 				    const char *value)
@@ -2220,6 +2256,7 @@ static const struct parse_data ssid_fields[] = {
 	{ STR(id_str) },
 #ifdef CONFIG_IEEE80211W
 	{ INT_RANGE(ieee80211w, 0, 2) },
+	{ FUNC(ocv) },
 #endif /* CONFIG_IEEE80211W */
 	{ FUNC(peerkey) /* obsolete - removed */ },
 	{ INT_RANGE(mixed_cell, 0, 1) },

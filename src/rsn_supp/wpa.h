@@ -95,7 +95,8 @@ enum wpa_sm_conf_params {
 	WPA_PARAM_KEY_MGMT,
 	WPA_PARAM_MGMT_GROUP,
 	WPA_PARAM_RSN_ENABLED,
-	WPA_PARAM_MFP
+	WPA_PARAM_MFP,
+	WPA_PARAM_OCV /* XXX - is this is good spot for this */
 };
 
 struct rsn_supp_config {
