@@ -22,6 +22,7 @@
 #include "common/ieee802_11_common.h"
 #include "eap_common/eap_defs.h"
 #include "eapol_supp/eapol_supp_sm.h"
+#include "drivers/driver.h"
 #include "wpa.h"
 #include "eloop.h"
 #include "preauth.h"
@@ -610,6 +611,43 @@ static void wpa_supplicant_process_1_of_4(struct wpa_sm *sm,
 
 	kde = sm->assoc_wpa_ie;
 	kde_len = sm->assoc_wpa_ie_len;
+
+	if (wpa_sm_ocv_enabled(sm)) {
+		struct wpa_channel_info ci;
+		u8 op_class, channel;
+		u8 *pos;
+
+		if (wpa_sm_channel_info(sm, &ci) != 0) {
+			wpa_printf(MSG_WARNING, "Failed to get channel info "
+				   "for OCI element in EAPOL-Key 2/4");
+			goto failed;
+		}
+		if (ieee80211_chaninfo_to_channel(ci.frequency, ci.chanwidth,
+									ci.sec_channel, &op_class, &channel) < 0) {
+			wpa_printf(MSG_WARNING, "Cannot determine operating class "
+				   "and channel for OCI element in EAPOL-Key 2/4");
+			goto failed;
+		}
+
+		kde_buf = os_malloc(kde_len + 2 + RSN_SELECTOR_LEN + 3);
+		if (!kde_buf) {
+			wpa_printf(MSG_WARNING, "Failed to allocate memory for "
+				   "KDE with OCI in EAPOL-Key 2/4");
+			goto failed;
+		}
+
+		os_memcpy(kde_buf, kde, kde_len);
+		kde = kde_buf;
+		pos = kde + kde_len;
+		*pos++ = WLAN_EID_VENDOR_SPECIFIC;
+		*pos++ = RSN_SELECTOR_LEN + 3;
+		RSN_SELECTOR_PUT(pos, RSN_KEY_DATA_OCI);
+		pos += RSN_SELECTOR_LEN;
+		*pos++ = op_class;
+		*pos++ = channel;
+		*pos++ = ci.seg1_idx;
+		kde_len = pos - kde;
+	}
 
 #ifdef CONFIG_P2P
 	if (sm->p2p) {
@@ -2912,6 +2950,22 @@ int wpa_sm_pmf_enabled(struct wpa_sm *sm)
 	    rsn.capabilities & (WPA_CAPABILITY_MFPR | WPA_CAPABILITY_MFPC))
 		return 1;
 
+	return 0;
+}
+
+
+int wpa_sm_ocv_enabled(struct wpa_sm *sm)
+{
+	struct wpa_ie_data rsn;
+
+	if (!sm->ocv || !sm->ap_rsn_ie)
+		return 0;
+
+	if (wpa_parse_wpa_ie_rsn(sm->ap_rsn_ie, sm->ap_rsn_ie_len, &rsn) >= 0 &&
+	    rsn.capabilities & WPA_CAPABILITY_OCVC)
+		return 1;
+
+	printf("rsn.capabilities=%0x04X\n", rsn.capabilities);
 	return 0;
 }
 
