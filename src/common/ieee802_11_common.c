@@ -927,6 +927,35 @@ int ieee80211_chaninfo_to_channel(unsigned int freq,
 }
 
 
+int oci_derive_all_parameters(struct oci_info *oci)
+{
+	const struct oper_class_map *op_class_map;
+
+	oci->freq = ieee80211_chan_to_freq(NULL, oci->op_class, oci->channel);
+	if (oci->freq < 0) {
+		wpa_printf(MSG_INFO, "Unrecognized opclass/channel (%d/%d) "
+			"in msg 2/4", oci->op_class, oci->channel);
+		return -1;
+	}
+
+	op_class_map = get_oper_class(NULL, oci->op_class);
+	if (op_class_map == NULL) {
+		wpa_printf(MSG_INFO,  "Unrecognized opclass (%d) "
+			"in msg 2/4", oci->op_class);
+		return -1;
+	}
+
+	oci->chanwidth = oper_class_bw_to_int(op_class_map);
+	oci->sec_channel = 0;
+	if (op_class_map->bw == BW40PLUS)
+		oci->sec_channel = 1;
+	else if (op_class_map->bw == BW40MINUS)
+		oci->sec_channel = -1;
+
+	return 0;
+}
+
+
 static const char *const us_op_class_cc[] = {
 	"US", "CA", NULL
 };

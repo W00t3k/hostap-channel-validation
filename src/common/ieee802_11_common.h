@@ -24,6 +24,18 @@ struct mb_ies_info {
 	u8 nof_ies;
 };
 
+struct oci_info {
+	/** Values in the OCI element */
+	u8 op_class;
+	u8 channel;
+	u8 seg1_idx;
+
+	/** Derived values for easier verification */
+	int freq;
+	int sec_channel;
+	int chanwidth;
+};
+
 /* Parsed Information Elements */
 struct ieee802_11_elems {
 	const u8 *ssid;
@@ -162,6 +174,7 @@ enum hostapd_hw_mode ieee80211_freq_to_channel_ext(unsigned int freq,
 int ieee80211_chaninfo_to_channel(unsigned int freq,
 				enum chan_width chanwidth, int sec_channel,
 				u8 *op_class, u8 *channel);
+int oci_derive_all_parameters(struct oci_info *oci);
 int ieee80211_is_dfs(int freq, const struct hostapd_hw_modes *modes,
 		     u16 num_modes);
 enum phy_type ieee80211_get_phy_type(int freq, int ht, int vht);
