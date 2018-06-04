@@ -2622,6 +2622,117 @@ u8 * hostapd_eid_assoc_fils_session(struct wpa_state_machine *sm, u8 *buf,
 
 #endif /* CONFIG_FILS */
 
+int get_sta_tx_parameters(struct wpa_state_machine *sm, int ap_max_chanwidth, int ap_seg1_idx, int *bandwidth, int *seg1_idx)
+{
+	struct sta_info *sta;
+	int ht_40mhz;
+	int vht_chanwidth;
+	int vht_80p80;
+	int requested_bw;
+
+	sta = wpa_get_sta(sm->wpa_auth, sm->addr);
+	if (sta == NULL) {
+		wpa_auth_logger(sm->wpa_auth, sm->addr, LOGGER_INFO, "Failed to get "
+			   "STA info to validate received OCI in EAPOL-Key 2/4");
+		return -1;
+	}
+
+	ht_40mhz = 0;
+	if (sta->ht_capabilities)
+		ht_40mhz = !!(sta->ht_capabilities->ht_capabilities_info & HT_CAP_INFO_SUPP_CHANNEL_WIDTH_SET);
+
+	vht_chanwidth = 0;
+	vht_80p80 = 0;
+	if (sta->vht_capabilities) {
+		vht_chanwidth = sta->vht_capabilities->vht_capabilities_info & VHT_CAP_SUPP_CHAN_WIDTH_MASK;
+		vht_80p80 = sta->vht_capabilities->vht_capabilities_info & VHT_CAP_SUPP_CHAN_WIDTH_160_80PLUS80MHZ;
+	}
+
+	requested_bw = 20;
+	if (sta->vht_capabilities)
+		requested_bw = vht_chanwidth ? 160 : 80;
+	else if (ht_40mhz)
+		requested_bw = 40;
+
+	*bandwidth = requested_bw < ap_max_chanwidth ? requested_bw : ap_max_chanwidth;
+
+	*seg1_idx = 0;
+	if (ap_seg1_idx && vht_80p80)
+		*seg1_idx = ap_seg1_idx;
+
+	return 0;
+}
+
+
+int verify_tx2sta_using_oci(struct wpa_state_machine *sm, struct oci_info *oci)
+{
+	struct wpa_authenticator *wpa_auth = sm->wpa_auth;
+	struct wpa_channel_info ci;
+	int ap_max_chanwidth;
+	int tx2sta_chanwidth;
+	int tx2sta_seg1_idx;
+
+	if (oci_derive_all_parameters(oci) != 0)
+		return -1;
+	if (wpa_channel_info(wpa_auth, &ci) != 0) {
+		wpa_auth_logger(wpa_auth, sm->addr, LOGGER_INFO, "Failed to get "
+			   "channel info to validate received OCI in EAPOL-Key 2/4");
+		return -1;
+	}
+	ap_max_chanwidth = channel_width_to_int(ci.chanwidth);
+
+	/** Derive bandwidth and seg1_idx we use to send frames to the STA */
+	if (get_sta_tx_parameters(sm, ap_max_chanwidth, ci.seg1_idx,
+					&tx2sta_chanwidth, &tx2sta_seg1_idx) < 0)
+		return -1;
+
+	/** Primary frequency used to send frames to STA must match the STA's */
+	if (ci.frequency != oci->freq) {
+		wpa_auth_vlogger(wpa_auth, sm->addr, LOGGER_INFO,
+			"Primary channel mismatch in received OCI of msg 2/4 "
+			"(we use %d but client is using %d)", ci.frequency, oci->freq);
+		return -1;
+	}
+
+	/** Whe shouldn't transmit with a higher bandwidth than the STA supports */
+	if (tx2sta_chanwidth > oci->chanwidth) {
+		wpa_auth_vlogger(wpa_auth, sm->addr, LOGGER_INFO,
+			"Channel bandwidth mismatch in received OCI of msg 2/4 "
+			"(we use %d but client only supports %d)",
+			tx2sta_chanwidth, oci->chanwidth);
+		return -1;
+	}
+
+	/**
+	 * Secondary channel only needs be checked for 40 MHz the 2.4 GHz band.
+	 * In the 5 GHz band it's verified through the primary frequency. Note
+	 * that the field ci.sec_channel is only filled in when we use 40 MHz.
+	 */
+	printf(">>> %s: ap_max_chanwidth=%d ci.sec_channel=%d oci->sec_channel=%d\n", __FUNCTION__, ap_max_chanwidth, ci.sec_channel, oci->sec_channel);
+	if (tx2sta_chanwidth == 40 && ci.frequency < 2500
+		&& ci.sec_channel != oci->sec_channel) {
+		wpa_auth_vlogger(wpa_auth, sm->addr, LOGGER_INFO,
+			"Secondary channel mismatch in received OCI of msg 2/4 "
+			"(we use %d but client is using %d)",
+			ci.sec_channel, oci->sec_channel);
+		return -1;
+	}
+
+	/**
+	 * When using a 160 or 80+80 MHz channel to transmit, verify that we use
+	 * the same segments as the receiver by comparing frequency segment 1.
+	 */
+	if (ap_max_chanwidth == 160 && tx2sta_seg1_idx != oci->seg1_idx) {
+		wpa_auth_vlogger(wpa_auth, sm->addr, LOGGER_INFO,
+			"Frequency segment 1 mismatch in received OCI of msg 2/4 "
+			"(we use %d but client is using %d)",
+			tx2sta_seg1_idx, oci->seg1_idx);
+		return -1;
+	}
+
+	return 0;
+}
+
 
 SM_STATE(WPA_PTK, PTKCALCNEGOTIATING)
 {
@@ -2744,6 +2855,27 @@ SM_STATE(WPA_PTK, PTKCALCNEGOTIATING)
 		wpa_sta_disconnect(wpa_auth, sm->addr,
 				   WLAN_REASON_PREV_AUTH_NOT_VALID);
 		return;
+	}
+	if (sm->ocv_enabled) {
+		struct oci_info oci;
+
+		if (!kde.oci) {
+			wpa_auth_logger(wpa_auth, sm->addr, LOGGER_WARNING,
+				"Client did not include OCI KDE in msg 2/4");
+			return;
+		} else if (kde.oci_len != 3) {
+			wpa_auth_vlogger(wpa_auth, sm->addr, LOGGER_WARNING,
+				"Received OCI KDE of unexpected length (%d) in msg 2/4",
+				(int)kde.oci_len);
+			return;
+		}
+
+		memset(&oci, 0, sizeof(oci));
+		oci.op_class = kde.oci[0];
+		oci.channel = kde.oci[1];
+		oci.seg1_idx = kde.oci[2];
+		if (verify_tx2sta_using_oci(sm, &oci) != 0)
+			return;
 	}
 #ifdef CONFIG_IEEE80211R_AP
 	if (ft && ft_check_msg_2_of_4(wpa_auth, sm, &kde) < 0) {
