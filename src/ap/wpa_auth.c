@@ -3108,6 +3108,8 @@ SM_STATE(WPA_PTK, PTKINITNEGOTIATING)
 	if (WPA_GET_BE32(sm->ip_addr) > 0)
 		kde_len += 2 + RSN_SELECTOR_LEN + 3 * 4;
 #endif /* CONFIG_P2P */
+	if (sm->ocv_enabled)
+		kde_len += 2 + RSN_SELECTOR_LEN + 3;
 	kde = os_malloc(kde_len);
 	if (kde == NULL)
 		return;
@@ -3192,6 +3194,31 @@ SM_STATE(WPA_PTK, PTKINITNEGOTIATING)
 				  addr, sizeof(addr), NULL, 0);
 	}
 #endif /* CONFIG_P2P */
+
+	if (sm->ocv_enabled) {
+		struct wpa_channel_info ci;
+		u8 op_class, channel;
+
+		if (wpa_channel_info(sm->wpa_auth, &ci) != 0) {
+			wpa_printf(MSG_WARNING, "Failed to get channel info "
+				   "for OCI element in EAPOL-Key 3/4");
+			return;
+		}
+		if (ieee80211_chaninfo_to_channel(ci.frequency, ci.chanwidth,
+									ci.sec_channel, &op_class, &channel) < 0) {
+			wpa_printf(MSG_WARNING, "Cannot determine operating class "
+				   "and channel for OCI element in EAPOL-Key 3/4");
+			return;
+		}
+
+		*pos++ = WLAN_EID_VENDOR_SPECIFIC;
+		*pos++ = RSN_SELECTOR_LEN + 3;
+		RSN_SELECTOR_PUT(pos, RSN_KEY_DATA_OCI);
+		pos += RSN_SELECTOR_LEN;
+		*pos++ = op_class;
+		*pos++ = channel;
+		*pos++ = ci.seg1_idx;
+	}
 
 	wpa_send_eapol(sm->wpa_auth, sm,
 		       (secure ? WPA_KEY_INFO_SECURE : 0) |
