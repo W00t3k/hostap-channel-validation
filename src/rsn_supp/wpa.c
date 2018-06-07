@@ -636,6 +636,7 @@ static void wpa_supplicant_process_1_of_4(struct wpa_sm *sm,
 			goto failed;
 		}
 
+		// XXX-X Create a utility function for this???
 		os_memcpy(kde_buf, kde, kde_len);
 		kde = kde_buf;
 		pos = kde + kde_len;
@@ -1381,6 +1382,81 @@ int wpa_supplicant_send_4_of_4(struct wpa_sm *sm, const unsigned char *dst,
 }
 
 
+int verify_tx2ap_using_oci(struct wpa_sm *sm, struct oci_info *oci)
+{
+	struct wpa_channel_info ci;
+	int sta_max_chanwidth;
+	int tx2ap_chanwidth;
+	int tx2ap_seg1_idx;
+
+	if (oci_derive_all_parameters(oci) != 0) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_WARNING, "Unable to interpret "
+			   "the OCI in EAPOL-Key 3/4");
+		return -1;
+	}
+	if (wpa_sm_channel_info(sm, &ci) != 0) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_WARNING, "Failed to get channel "
+			   "info to validate received OCI in EAPOL-Key 3/4");
+		return -1;
+	}
+	sta_max_chanwidth = channel_width_to_int(ci.chanwidth);
+
+	// XXX-X: Can it ever be that our interface is in fact using a lower
+	// bandwidth to communicate with the AP? I suppose just requesting
+	// the AP's capabilities would easily fix this doubt...
+	tx2ap_chanwidth = sta_max_chanwidth;
+	tx2ap_seg1_idx  = ci.seg1_idx;
+
+
+	/** Primary frequency used to send frames to STA must match the STA's */
+	if (ci.frequency != oci->freq) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_INFO,
+			"Primary channel mismatch in received OCI of msg 3/4 "
+			"(we use %d but AP is using %d)", ci.frequency, oci->freq);
+		return -1;
+	}
+
+	/** Whe shouldn't transmit with a higher bandwidth than the STA supports */
+	if (tx2ap_chanwidth > oci->chanwidth) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_INFO,
+			"Channel bandwidth mismatch in received OCI of msg 3/4 "
+			"(we use %d but AP only supports %d)",
+			tx2ap_chanwidth, oci->chanwidth);
+		return -1;
+	}
+
+	/**
+	 * Secondary channel only needs be checked for 40 MHz the 2.4 GHz band.
+	 * In the 5 GHz band it's verified through the primary frequency. Note
+	 * that the field ci.sec_channel is only filled in when we use 40 MHz.
+	 */
+	printf(">>> %s: sta_max_chanwidth=%d ci.sec_channel=%d oci->sec_channel=%d\n", __FUNCTION__, sta_max_chanwidth, ci.sec_channel, oci->sec_channel);
+	if (tx2ap_chanwidth == 40 && ci.frequency < 2500
+		&& ci.sec_channel != oci->sec_channel) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_INFO,
+			"Secondary channel mismatch in received OCI of msg 3/4 "
+			"(we use %d but AP is using %d)",
+			ci.sec_channel, oci->sec_channel);
+		return -1;
+	}
+
+	/**
+	 * When using a 160 or 80+80 MHz channel to transmit, verify that we use
+	 * the same segments as the receiver by comparing frequency segment 1.
+	 */
+	if (sta_max_chanwidth == 160 && tx2ap_seg1_idx != oci->seg1_idx) {
+		wpa_msg(sm->ctx->msg_ctx, MSG_INFO,
+			"Frequency segment 1 mismatch in received OCI of msg 3/4 "
+			"(we use %d but AP is using %d)",
+			tx2ap_seg1_idx, oci->seg1_idx);
+		return -1;
+	}
+
+	return 0;
+}
+
+
+
 static void wpa_supplicant_process_3_of_4(struct wpa_sm *sm,
 					  const struct wpa_eapol_key *key,
 					  u16 ver, const u8 *key_data,
@@ -1448,6 +1524,28 @@ static void wpa_supplicant_process_3_of_4(struct wpa_sm *sm,
 			    sm->p2p_ip_addr, sizeof(sm->p2p_ip_addr));
 	}
 #endif /* CONFIG_P2P */
+
+	if (wpa_sm_ocv_enabled(sm)) {
+		struct oci_info oci;
+
+		if (!ie.oci) {
+			wpa_msg(sm->ctx->msg_ctx, MSG_WARNING,
+				"AP did not include OCI KDE in msg 3/4");
+			return;
+		} else if (ie.oci_len != 3) {
+			wpa_msg(sm->ctx->msg_ctx, MSG_WARNING,
+				"Received OCI KDE of unexpected length (%d) in msg 3/4",
+				(int)ie.oci_len);
+			return;
+		}
+
+		memset(&oci, 0, sizeof(oci));
+		oci.op_class = ie.oci[0];
+		oci.channel = ie.oci[1];
+		oci.seg1_idx = ie.oci[2];
+		if (verify_tx2ap_using_oci(sm, &oci) != 0)
+			return;
+	}
 
 	if (wpa_supplicant_send_4_of_4(sm, sm->bssid, key, ver, key_info,
 				       &sm->ptk) < 0) {
@@ -2954,6 +3052,7 @@ int wpa_sm_pmf_enabled(struct wpa_sm *sm)
 }
 
 
+// FIXME: We also need to be able to check if OCV is used in other handshakes?!
 int wpa_sm_ocv_enabled(struct wpa_sm *sm)
 {
 	struct wpa_ie_data rsn;
